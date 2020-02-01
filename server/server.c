@@ -14,7 +14,7 @@
 //服务请求类型
 #define	CONNECT 1	//请求连接
 #define	NORMAL	2	//聊天内容
-#define PUT_F	3	//请求上传文件
+#define S_CON	3	//SIRI控制请求
 #define GET_F	4	//请求下载文件
 
 typedef struct combine{
@@ -140,7 +140,7 @@ void *threadConnect(void *vargp){
 			case CONNECT:
 				strcpy(clientList[index].nickNme,recv_buf+3);
 				sayHello(recv_buf,clientList[index].ip,index);
-				printf("新的连接:%ssocket\n",clientList[index].nickNme);//,clientList[index].socket
+				printf("新的连接:%s\n",clientList[index].nickNme);//,clientList[index].socket
 				printf("当前在线数:%d\n",getClientCunt());
 				break;
 			case NORMAL:
@@ -148,6 +148,11 @@ void *threadConnect(void *vargp){
 				sprintf(tem,"%s[%s]:%s",clientList[index].nickNme,clientList[index].ip,recv_buf+3);
 				printf("转发消息 : %s\n",tem);
 				broadcast(tem,index);
+				break;
+			case S_CON:
+				sprintf(tem,"%s[%s]:%s",clientList[index].nickNme,clientList[index].ip,recv_buf+3);
+				send(clientList[index].socket, tem, strlen(tem), 0);
+				printf("发送消息 : %s\n",tem);
 				break;
 			default:
 			printf("非法的请求!");
@@ -178,8 +183,8 @@ int getRequestType(char *str){
 		//聊天消息
 		return NORMAL;
 	}else if(0==strcmp(tem,".._")){
-		//请求上传文件
-		return PUT_F;
+		//SIRI控制请求
+		return S_CON;
 	}else  if(0==strcmp(tem,"_..")){
 		//请求下载文件
 		return GET_F;
@@ -239,16 +244,3 @@ void sayHello(char *str,char *ip,int index){
 	sprintf(hello,"欢迎%s[%s]加入聊天室!",name,ip);
 	broadcast(hello,index);
 }
-
-
-			// case PUT_F:
-			// 	printf("文件上传请求!文件名:%s\n",recv_buf+3);
-			// 	scom sf;
-			// 	sf.index=index;
-			// 	sf.sockfd=clientList[index].socket;
-			// 	strcpy(sf.filePath,recv_buf+3);
-			// 	pthread_t t_receive_file;
-			// 	//printf("传给文件线程的到参数为:%s:%d\n",sf.filePath,sf.sockfd);
-			// 	pthread_create(&t_receive_file, NULL, threadReceiveFile, &sf);
-			// 	pthread_join(t_receive_file, NULL);
-			// 	break;
