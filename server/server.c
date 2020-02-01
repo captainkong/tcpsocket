@@ -9,9 +9,9 @@
 
 
 #define CLIENT_MAX_COUNT	5
-#define MAXLINE			1024
+#define MAXLINE				1024
 
-//请求类型
+//服务请求类型
 #define	CONNECT 1	//请求连接
 #define	NORMAL	2	//聊天内容
 #define PUT_F	3	//请求上传文件
@@ -23,33 +23,23 @@ typedef struct combine{
 	char filePath[128];
 }scom;
 
-
 typedef struct  _client_type
 {
 	char ip[INET_ADDRSTRLEN];	//字符串ip
 	int socket;					//套接字
 	char nickNme[30];			//昵称
-	
 }client;
 
 
 void *threadConnect(void *vargp);
-void *threadReceiveFile(void *vargp);
 void sayHello(char *str,char *ip,int index);
 void broadcast(char *str,int except);
 int getClientCunt();
 int getIndexBySocket(int socket);
 int getFreeIndex();
 int getRequestType(char *str);
-void *threadSendFile(void * combine);
-void *threadReceiveFile(void *combine);
-
-
 
 client clientList[5]={{"",-1},{"",-1},{"",-1},{"",-1},{"",-1}};
-
-
-
 
 
 int main(int argc, char *argv[])
@@ -121,7 +111,6 @@ int main(int argc, char *argv[])
 			break;
 		}
 
-
 		inet_ntop(AF_INET, &client_addr.sin_addr,clientList[index].ip , INET_ADDRSTRLEN);
 		clientList[index].socket=connfd;		
 		pthread_t tid;
@@ -149,12 +138,10 @@ void *threadConnect(void *vargp){
 		//printf("%s-+-%d\n", recv_buf,type);
 		switch(type){
 			case CONNECT:
-				
 				strcpy(clientList[index].nickNme,recv_buf+3);
 				sayHello(recv_buf,clientList[index].ip,index);
 				printf("新的连接:%ssocket\n",clientList[index].nickNme);//,clientList[index].socket
 				printf("当前在线数:%d\n",getClientCunt());
-
 				break;
 			case NORMAL:
 				memset(tem,0,sizeof(tem));
@@ -162,38 +149,6 @@ void *threadConnect(void *vargp){
 				printf("转发消息 : %s\n",tem);
 				broadcast(tem,index);
 				break;
-			case PUT_F:
-				printf("文件上传请求!文件名:%s\n",recv_buf+3);
-				scom sf;
-				sf.index=index;
-				sf.sockfd=clientList[index].socket;
-				strcpy(sf.filePath,recv_buf+3);
-				pthread_t t_receive_file;
-				//printf("传给文件线程的到参数为:%s:%d\n",sf.filePath,sf.sockfd);
-				pthread_create(&t_receive_file, NULL, threadReceiveFile, &sf);
-				pthread_join(t_receive_file, NULL);
-				break;
-			case GET_F:
-				printf("文件下载请求!文件名%s\n",recv_buf+3);
-				char state[10];
-				if(0!=access(recv_buf+3,R_OK)){
-					strcpy(state,"_..err");
-					send(clientList[index].socket, state, strlen(state), 0);
-					
-				}else{
-					strcpy(state,"_..ok");
-					send(clientList[index].socket, state, strlen(state), 0);
-					//sleep(1);
-					scom sf;
-					sf.sockfd=clientList[index].socket;
-					strcpy(sf.filePath,recv_buf+3);
-					pthread_t t_send_file;
-					//printf("传给文件线程的到参数为:%s:%d\n",sf.filePath,sf.sockfd);
-					pthread_create(&t_send_file, NULL, threadSendFile, &sf);
-					pthread_join(t_send_file, NULL);
-				}
-				
-				break;		
 			default:
 			printf("非法的请求!");
 		}
@@ -207,85 +162,6 @@ void *threadConnect(void *vargp){
 	memset(recv_buf,0,sizeof(recv_buf));
 	memset(clientList[index].nickNme,0,sizeof(clientList[index].nickNme));
 	
-
-}
-
-void *threadSendFile(void * combine)
-{
-
-	char tem[128];
-	char send_buf[MAXLINE];
-	char filePath[128];
-	scom tc=*((scom *)combine);
-	int sockfd = tc.sockfd;
-	FILE *fp;
-
-	sprintf(send_buf,".._%s",tc.filePath);
-
-	if ((fp = fopen(tc.filePath,"r")) == NULL) 
-	{  
-    	perror("Open file failed\n");  
-    	exit(0);  
-	} 
-
-	memset(send_buf,0,sizeof(send_buf));
-	//printf("文件线程的到参数为:%s:%d\n",tc.filePath,sockfd);
-	int send_len=0,read_len=0;
-	while ((read_len = fread(send_buf, sizeof(char), MAXLINE, fp)) >0 ) 
-	{  
-		send_len = send(sockfd, send_buf, read_len, 0);  
-		if ( send_len < 0 ) 
-		{  
-			perror("Send file failed\n");  
-			exit(0);  
-		}  
-
-		memset(send_buf,0,sizeof(send_buf));
-	} 
-	printf("文件传输完毕!\n");
-
-	sleep(1);
-	send(sockfd, "---", 4, 0);
-	fclose(fp);
-}
-
-void *threadReceiveFile(void *combine){
-
-	char tem[128];
-	char file_buf[MAXLINE];
-	char filePath[128];
-	scom tc=*((scom *)combine);
-	int sockfd = tc.sockfd;
-	FILE *fp;
-
-	if ((fp = fopen(tc.filePath, "a+")) == NULL) 
-	{  
-   	 	perror("Open file failed\n");  
-    	exit(0);  
-	}
-
-	memset(file_buf,0,sizeof(file_buf));
-	int write_leng;
-	while(recv(sockfd, file_buf, sizeof(file_buf), 0)){
-
-		if(0==strcmp("---",file_buf))
-			break;
-
-		write_leng = fwrite(file_buf, sizeof(char), sizeof(file_buf), fp);  
-		if (write_leng < sizeof(file_buf)) 
-		{  
- 		   printf("Write file failed\n");  
-  		   break;  
-		} 
-		memset(file_buf,0,sizeof(file_buf));
-	}
-
-
-	fclose(fp);
-	memset(tem,0,sizeof(tem));
-	sprintf(tem,"%s上传了新文件:%s",clientList[tc.index].nickNme,tc.filePath);
-	printf("文件保存成功!\n");
-	broadcast(tem,tc.index);
 
 }
 
@@ -363,3 +239,16 @@ void sayHello(char *str,char *ip,int index){
 	sprintf(hello,"欢迎%s[%s]加入聊天室!",name,ip);
 	broadcast(hello,index);
 }
+
+
+			// case PUT_F:
+			// 	printf("文件上传请求!文件名:%s\n",recv_buf+3);
+			// 	scom sf;
+			// 	sf.index=index;
+			// 	sf.sockfd=clientList[index].socket;
+			// 	strcpy(sf.filePath,recv_buf+3);
+			// 	pthread_t t_receive_file;
+			// 	//printf("传给文件线程的到参数为:%s:%d\n",sf.filePath,sf.sockfd);
+			// 	pthread_create(&t_receive_file, NULL, threadReceiveFile, &sf);
+			// 	pthread_join(t_receive_file, NULL);
+			// 	break;
