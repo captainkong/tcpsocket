@@ -1,6 +1,6 @@
 TARGET = client
 SOURCE = client.c
-CFLAGS = -Wall
+CFLAGS = -lpthread -std=c99 -Wall
 CC = gcc
 
 $(TARGET):$(SOURCE)

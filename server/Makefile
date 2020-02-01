@@ -1,10 +1,11 @@
-TARGET = tcp_echo_srv
-SOURCE = tcp_echo_srv.c
-CFLAGS = -Wall
+TARGET = server
+SOURCE = server.c
+CFLAGS = -lpthread -std=c99 -Wall
 CC = gcc
 
 $(TARGET):$(SOURCE)
 	$(CC) $(SOURCE) -o $(TARGET) $(CFLAGS)
-
+	
 clean:
 	rm -fr $(TARGET)
+	
