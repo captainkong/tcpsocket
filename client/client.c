@@ -7,10 +7,7 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <time.h>
-
-#define MAX_MEM_COUNT 20  //内存中最大聊天记录个数
-#define MAX_LIST_COUNT 10 //客户端显示的最大聊天记录个数
-#define MAXLINE 1024
+#include "../lib/cJSON/cJSON.h"
 
 
 typedef struct _chat_data
@@ -68,10 +65,21 @@ int main(int argc, char *argv[])
 		exit(-1);
 	}
 
-	sprintf(temp, "_._%s", name);
+	cJSON* root=cJSON_CreateObject();	
+	cJSON_AddStringToObject(root, "type","CONNECT");
+	cJSON_AddStringToObject(root, "data",name);
+	
+    char * out=cJSON_Print(root);
+	cJSON_Delete(root);
+	printf("%s\n",out);
+	
+	send(sockfd, out, strlen(out), 0); // 向服务器发送信息
+	free(out);
+
+	//sprintf(temp, "_._%s", name);
 
 	//向服务端发送个人信息
-	send(sockfd, temp, strlen(temp), 0); // 向服务器发送信息
+	//send(sockfd, temp, strlen(temp), 0); // 向服务器发送信息
 
 	pthread_t tid1, tid2;
 	pthread_create(&tid1, NULL, threadsend, &sockfd);
@@ -86,12 +94,23 @@ int main(int argc, char *argv[])
 
 void *threadsend(void *vargp)
 {
-	char tem[512]="this is a test!";
 	char send_buf[512];
 	int sockfd = *((int *)vargp);
-	sprintf(send_buf, ".._%s", tem);	//捆绑请求类型
-	send(sockfd, send_buf, strlen(send_buf), 0); // 向服务器发送信息
+	
+	cJSON* root=cJSON_CreateObject();	
+	cJSON_AddStringToObject(root, "type","S_CON");
+	cJSON_AddStringToObject(root, "data","this is a test from client");
+	
+	
+   // cJSON_Print(root);
+    char * out=cJSON_Print(root);
+	cJSON_Delete(root);
+	printf("%s\n",out);
+	
 
+	//sprintf(send_buf, ".._%s", out);	//捆绑请求类型
+	send(sockfd, out, strlen(out), 0); // 向服务器发送信息
+	free(out);
 	/*
 	while (1)
 	{
