@@ -1,4 +1,4 @@
-TARGET = server
+TARGET = serverd
 SOURCE = server.c
 CFLAGS = -lpthread	-L../lib/cJSON -lcjson -lm -std=c99 -Wall
 CC = gcc
