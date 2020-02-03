@@ -7,7 +7,6 @@
 #include <pthread.h>
 #include <arpa/inet.h>
 
-
 #define CLIENT_MAX_COUNT	5
 #define MAXLINE				1024
 

@@ -8,8 +8,6 @@
 #include <pthread.h>
 #include <time.h>
 
-#define MAX_MEM_COUNT 20  //内存中最大聊天记录个数
-#define MAX_LIST_COUNT 10 //客户端显示的最大聊天记录个数
 #define MAXLINE 1024
 
 
