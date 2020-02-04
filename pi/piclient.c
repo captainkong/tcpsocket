@@ -29,7 +29,7 @@ int getRequestType(char *str);	//获取请求类型
 int main(int argc, char *argv[])
 {
 	unsigned short port = 8000;				// 服务器的端口号
-	char *server_ip = "123.207.127.205";	// 服务器ip地址
+	char *server_ip = "127.0.0.1";	// 服务器ip地址
 
 	char name[10]="PI";
 	int sockfd = 0;
@@ -78,42 +78,6 @@ int main(int argc, char *argv[])
 	close(sockfd);
 	return 0;
 }
-
-/*
-void *threadsend(void *vargp)
-{
-	char tem[512]="this is a test!";
-	char send_buf[512];
-	int sockfd = *((int *)vargp);
-
-	
-	while (1)
-	{
-		gets(tem);
-		if (strlen(tem) == 0)
-		{
-			continue;
-		}
-		if (strlen(tem) == 1&&tem[0] == 'q')
-		{
-			printf("bye...\n");
-			exit(0);
-		}
-		else
-		{
-			printf("ME:%s\n",tem);
-			sprintf(send_buf, "__.%s", tem);
-			send(sockfd, send_buf, strlen(send_buf), 0); // 向服务器发送信息
-			
-		}
-		memset(send_buf, 0, sizeof(send_buf));
-	}
-
-	
-	return NULL;
-}
-
-*/
 
 void *threadrecv(void *vargp)
 {

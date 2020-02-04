@@ -148,7 +148,7 @@ void *threadConnect(void *vargp)
 				printf("Error before: [%s]\n", cJSON_GetErrorPtr());
 			}
 			strcpy(clientList[index].nickNme, item->valuestring);
-			sayHello(item->valuestring, clientList[index].ip, index);
+
 			if(0!=strcmp("Siri",clientList[index].nickNme))
 			{
 				printf("新的连接:%s\n", clientList[index].nickNme); //,clientList[index].socket
@@ -166,6 +166,14 @@ void *threadConnect(void *vargp)
 			sprintf(tem, "已收到来自Siri的信息:%s",  item->valuestring);
 			send(clientList[index].socket, tem, strlen(tem), 0);
 			printf("收到来自Siri的信息 : %s\n", item->valuestring);
+			
+			json=cJSON_CreateObject();	
+			cJSON_AddStringToObject(json, "type","CONNECT");
+			cJSON_AddStringToObject(json, "data",item->valuestring);
+			
+			char * out=cJSON_Print(json);
+			broadcast(out,index);
+			free(out);
 			break;
 		default:
 			printf("非法的请求!");
