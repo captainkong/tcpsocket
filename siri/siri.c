@@ -20,8 +20,12 @@
 void *threadsend(void *vargp);
 void *threadrecv(void *vargp);
 
+char arg[64];	//存贮参数
+
 int main(int argc, char *argv[])
 {
+	if(argc>1) strcpy(arg,argv[1]);
+
 	unsigned short port = 8000;		// 服务器的端口号
 	char *server_ip = "127.0.0.1";	// 服务器ip地址
 
@@ -56,7 +60,6 @@ int main(int argc, char *argv[])
 	
     char * out=cJSON_Print(root);
 	cJSON_Delete(root);
-	//printf("%s\n",out);
 	
 	send(sockfd, out, strlen(out), 0); // 向服务器发送信息
 	free(out);
@@ -78,7 +81,7 @@ void *threadsend(void *vargp)
 	
 	cJSON* root=cJSON_CreateObject();	
 	cJSON_AddStringToObject(root, "type","S_CON");
-	cJSON_AddStringToObject(root, "data","this is a test from client");
+	cJSON_AddStringToObject(root, "data",arg);
 	
     char * out=cJSON_Print(root);
 	cJSON_Delete(root);

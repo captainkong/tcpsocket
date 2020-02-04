@@ -9,7 +9,6 @@
 #include "../lib/cJSON/cJSON.h"
 
 #define CLIENT_MAX_COUNT 5
-#define MAXLINE 1024
 
 //服务请求类型
 #define CONNECT 1 //请求连接
@@ -17,18 +16,11 @@
 #define S_CON 	3   //SIRI控制请求
 #define TEST 	4	//请求下载文件
 
-typedef struct combine
-{
-	int sockfd;
-	int index;
-	char filePath[128];
-} scom;
-
 typedef struct _client_type
 {
 	char ip[INET_ADDRSTRLEN]; //字符串ip
 	int socket;				  //套接字
-	char nickNme[30];		  //昵称
+	char nickNme[30];		  //设备名
 } client;
 
 void *threadConnect(void *vargp);
@@ -157,9 +149,11 @@ void *threadConnect(void *vargp)
 			}
 			strcpy(clientList[index].nickNme, item->valuestring);
 			sayHello(item->valuestring, clientList[index].ip, index);
-			printf("新的连接:%s\n", clientList[index].nickNme); //,clientList[index].socket
-			printf("当前在线数:%d\n", getClientCunt());
-			//
+			if(0!=strcmp("Siri",clientList[index].nickNme))
+			{
+				printf("新的连接:%s\n", clientList[index].nickNme); //,clientList[index].socket
+				printf("当前在线数:%d\n", getClientCunt());
+			}
 			break;
 		case NORMAL:
 			memset(tem, 0, sizeof(tem));
@@ -169,9 +163,9 @@ void *threadConnect(void *vargp)
 			break;
 		case S_CON:	//Siri控制请求
 			item=cJSON_GetObjectItem(json,"data");
-			sprintf(tem, "%s[%s]:%s", clientList[index].nickNme, clientList[index].ip, item->valuestring);
+			sprintf(tem, "已收到来自Siri的信息:%s",  item->valuestring);
 			send(clientList[index].socket, tem, strlen(tem), 0);
-			printf("Siri反馈信息 : %s\n", tem);
+			printf("收到来自Siri的信息 : %s\n", item->valuestring);
 			break;
 		default:
 			printf("非法的请求!");
@@ -180,11 +174,14 @@ void *threadConnect(void *vargp)
 	}
 
 	close(connfd); //关闭已连接套接字
-	cJSON_Delete(json);//清空 顺序不能错	
+	cJSON_Delete(json);//清空	
 	
 	clientList[index].socket = -1;
-	printf("%s[%s]离开聊天室!\n", clientList[index].nickNme, clientList[index].ip);
-	printf("当前在线数:%d\n", getClientCunt());
+	if(0!=strcmp("Siri",clientList[index].nickNme))
+	{
+		printf("%s[%s]离开聊天室!\n", clientList[index].nickNme, clientList[index].ip);
+		printf("当前在线数:%d\n", getClientCunt());
+	}
 	memset(recv_buf, 0, sizeof(recv_buf));
 	memset(clientList[index].nickNme, 0, sizeof(clientList[index].nickNme));
 	return NULL;
