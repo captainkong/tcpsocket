@@ -168,7 +168,7 @@ void *threadConnect(void *vargp)
 			printf("收到来自Siri的信息 : %s\n", item->valuestring);
 			
 			json=cJSON_CreateObject();	
-			cJSON_AddStringToObject(json, "type","CONNECT");
+			cJSON_AddStringToObject(json, "type","S_CON");
 			cJSON_AddStringToObject(json, "data",item->valuestring);
 			
 			char * out=cJSON_Print(json);
