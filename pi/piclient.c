@@ -13,8 +13,10 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <pthread.h>
-#include <time.h>
+#include <openssl/rsa.h>
+#include <openssl/pem.h>
 #include "../lib/cJSON/cJSON.h"
+
 
 //请求类型
 #define CONNECT 1 	//请求连接
@@ -22,9 +24,14 @@
 #define S_CON 	3   //SIRI控制请求
 #define CLOSE 	4	//关闭连接请求
 
+#define PUBLICKEY "rsa_public_key.pem"
+#define PRIVATEKEY "rsa_private_key.pem"
+
 
 void *threadrecv(void *vargp);
 int getRequestType(char *str);	//获取请求类型
+
+char aes_key[130];	//存贮对称密钥
 
 int main(int argc, char *argv[])
 {
@@ -36,8 +43,6 @@ int main(int argc, char *argv[])
 	int err_log = 0;
 	struct sockaddr_in server_addr;
 
-	// printf("请输入你的姓名:\n");
-	// scanf("%s", &name);
 
 	memset(&server_addr, 0, sizeof(server_addr));
 	server_addr.sin_family = AF_INET;
@@ -61,12 +66,74 @@ int main(int argc, char *argv[])
 
 	cJSON* root=cJSON_CreateObject();	
 	cJSON_AddStringToObject(root, "type","CONNECT");
-	cJSON_AddStringToObject(root, "data",name);
+	cJSON_AddStringToObject(root, "data","这是一个中文测试,希望你能完整看到它");
 	
-    char * out=cJSON_Print(root);
+    unsigned char * out=(unsigned char *)cJSON_Print(root);
 	cJSON_Delete(root);
+	/////////////////// rsa 
+
+	FILE *fp = NULL;
+	RSA *publicRsa = NULL;
+	RSA *privateRsa = NULL;
+	if ((fp = fopen(PUBLICKEY, "r")) == NULL) 
+	{
+		printf("public key path error\n");
+		return -1;
+	} 	
+   
+	if ((publicRsa = PEM_read_RSA_PUBKEY(fp, NULL, NULL, NULL)) == NULL) 
+	{
+		printf("PEM_read_RSA_PUBKEY error\n");
+		return -1;
+	}
+	fclose(fp);
 	
-	send(sockfd, out, strlen(out), 0); // 向服务器发送信息
+	if ((fp = fopen(PRIVATEKEY, "r")) == NULL) 
+	{
+		printf("private key path error\n");
+		return -1;
+	}
+	//OpenSSL_add_all_algorithms();//密钥有经过口令加密需要这个函数
+	if ((privateRsa = PEM_read_RSAPrivateKey(fp, NULL, NULL, NULL)) == NULL) 
+	{
+		printf("PEM_read_RSAPrivateKey error\n");
+		return NULL;
+	}
+	fclose(fp);		
+	
+	//unsigned char *source = (unsigned char *)"{\"type\":\"s_con\"\,\"name\":\"中文测试\"}";
+		
+	int rsa_len = RSA_size(publicRsa);
+	printf("rsa_len:%d\n",rsa_len);
+ 
+	unsigned char *encryptMsg = (unsigned char *)malloc(rsa_len);
+	memset(encryptMsg, 0, rsa_len);
+ 		
+	int len = rsa_len - 11;
+ 		
+	if (RSA_public_encrypt(len, out, encryptMsg, publicRsa, RSA_PKCS1_PADDING) < 0)
+		printf("RSA_public_encrypt error\n");
+	else 
+	{
+        printf("encoded:%s\n",encryptMsg);
+		rsa_len = RSA_size(privateRsa);
+		printf("rsa_len(private):%d\n",rsa_len );
+		unsigned char *decryptMsg = (unsigned char *)malloc(rsa_len);
+		memset(decryptMsg, 0, rsa_len);
+	    
+		int mun =  RSA_private_decrypt(rsa_len, encryptMsg, decryptMsg, privateRsa, RSA_PKCS1_PADDING);
+	 
+		if ( mun < 0)
+			printf("RSA_private_decrypt error\n");
+		else
+			printf("RSA_private_decrypt %s\n", decryptMsg);
+	}	
+	
+	RSA_free(publicRsa);
+	RSA_free(privateRsa);
+
+	//////////////////
+	send(sockfd, encryptMsg, rsa_len, 0); // 向服务器发送信息
 	free(out);
 
 	pthread_t tid2;

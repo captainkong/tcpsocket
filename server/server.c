@@ -6,8 +6,11 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <arpa/inet.h>
+#include <openssl/rsa.h>
+#include <openssl/pem.h>
 #include "../lib/cJSON/cJSON.h"
 
+#define PRIVATEKEY "rsa_private_key.pem"
 #define CLIENT_MAX_COUNT 5
 
 //服务请求类型
@@ -124,10 +127,42 @@ void *threadConnect(void *vargp)
 	memset(recv_buf, 0, sizeof(recv_buf));
 	cJSON *json,*item;	//用完free
 
-	while ((recv_len = recv(connfd, recv_buf, sizeof(recv_buf), 0)) > 0)
+	while ((recv_len = recv(connfd, (unsigned char *)recv_buf, sizeof(recv_buf), 0)) > 0)
 	{
+		printf("收到消息:%s:\n",recv_buf);
+		FILE *fp = NULL;
+		RSA *privateRsa = NULL;
+	
+	
+		if ((fp = fopen(PRIVATEKEY, "r")) == NULL) 
+		{
+			printf("private key path error\n");
+			//return -1;
+		}
+		if ((privateRsa = PEM_read_RSAPrivateKey(fp, NULL, NULL, NULL)) == NULL) 
+		{
+			printf("PEM_read_RSAPrivateKey error\n");
+			return NULL;
+		}
+		fclose(fp);
+		
+		int rsa_len = RSA_size(privateRsa);
+		unsigned char *decryptMsg = (unsigned char *)malloc(rsa_len);
+		memset(decryptMsg, 0, rsa_len);
+		printf("rsa_len:%d\n",rsa_len );
+	    
+		int mun =  RSA_private_decrypt(rsa_len, recv_buf, decryptMsg, privateRsa, RSA_PKCS1_PADDING);
+	 
+		if ( mun < 0)
+			printf("RSA_private_decrypt error\n");
+		else
+			printf("RSA_private_decrypt %s\n", decryptMsg);
+		
+		RSA_free(privateRsa);
+
+
 		//解析json
-		json = cJSON_Parse(recv_buf);
+		json = cJSON_Parse((const char *)decryptMsg);
 		if (!json)
 		{
 			printf("Error before: [%s]\n", cJSON_GetErrorPtr());

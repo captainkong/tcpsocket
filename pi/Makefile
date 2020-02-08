@@ -1,6 +1,6 @@
 TARGET = client
 SOURCE = piclient.c
-CFLAGS = -lpthread	-L../lib/cJSON -lcjson -lm -std=c99 -Wall
+CFLAGS = -lpthread -lssl  -lcrypto	-L../lib/cJSON -lcjson -lm -std=c99 -Wall
 CC = gcc
 
 $(TARGET):$(SOURCE)
