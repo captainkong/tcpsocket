@@ -8,12 +8,11 @@
 #include <arpa/inet.h>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
-#include <openssl/aes.h>
 #include "../lib/cJSON/cJSON.h"
+#include "../lib/openssl/operate_aes.h"  
 
 #define PRIVATEKEY 			"rsa_private_key.pem"
 #define CLIENT_MAX_COUNT	5	//最大连接数量
-#define KEY_LENGTH  		256	//aes密钥位数
 #define	USER_LENGTH_KEY		65	//aes密钥长度(十六进制字符串)
 #define	USER_LENGTH_NAME	65	//设备名长度
 
@@ -35,16 +34,18 @@ typedef struct _client_type			//设备结构体
 void *threadConnect(void *vargp);
 void sayHello(char *str, char *ip, int index);
 void broadcast(char *str, int except);
+void initRsa();
 int getClientCunt();
 int getIndexBySocket(int socket);
 int getFreeIndex();
 int getRequestType(char *str);
-int aes_decrypt(char* in, char* key, char* out);
-int aes_encrypt(char* in, char* key, char* out);
+
 
 
 /*      全局变量    */
 client clientList[CLIENT_MAX_COUNT];
+RSA *privateRsa = NULL;
+
 
 int main(int argc, char *argv[])
 {
@@ -55,10 +56,7 @@ int main(int argc, char *argv[])
 	struct sockaddr_in my_addr; // 服务器地址结构体
 	unsigned short port = 8000; // 监听端口
 
-	if (argc > 1) // 由参数接收端口
-	{
-		port = atoi(argv[1]);
-	}
+	initRsa();	//初始化rsa私钥
 
 	printf("TCP Server Started at port %d!\n", port);
 
@@ -117,12 +115,12 @@ int main(int argc, char *argv[])
 		}
 
 		inet_ntop(AF_INET, &client_addr.sin_addr, clientList[index].ip, INET_ADDRSTRLEN);
-		printf("开始在%d设置socket\n",index);
+		//printf("开始在%d设置socket\n",index);
 		clientList[index].socket = connfd;
 		pthread_t tid;
 		pthread_create(&tid, NULL, threadConnect, &connfd);
 	}
-
+	RSA_free(privateRsa);
 	close(sockfd); //关闭监听套接字
 	return 0;
 }
@@ -131,52 +129,91 @@ void *threadConnect(void *vargp)
 {
 
 	size_t recv_len = 0;
-	char recv_buf[2048]; // 接收缓冲区
+	char recv_buf[512]; // 接收缓冲区
+	char *encrypt_buf;
+	char decrypt_buf[KEY_LENGTH];
 	char tem[2048];
 	char * out;
 	int connfd = *((int *)vargp);
 	int index = getIndexBySocket(connfd);
 	memset(recv_buf, 0, sizeof(recv_buf));
 	cJSON *json,*item;	//用完free
-	char encrypt_buffer[KEY_LENGTH] = {0};
+
+	//接收连接信息	本消息使用公钥加密
+	recv_len = recv(connfd, (unsigned char *)recv_buf, sizeof(recv_buf), 0);
+	//printf("收到连接消息:%s:\n",recv_buf);
+	int rsa_len = RSA_size(privateRsa);
+	unsigned char *decryptMsg = (unsigned char *)malloc(rsa_len);
+	memset(decryptMsg, 0, rsa_len);
+	//printf("rsa_len:%d\n",rsa_len );
+	//解密消息
+	int mun =  RSA_private_decrypt(rsa_len, (const unsigned char *)recv_buf, decryptMsg, privateRsa, RSA_PKCS1_PADDING);
+	memset(recv_buf, 0, sizeof(recv_buf));
+	if ( mun < 0)
+		printf("!!!!!!!!!!RSA_private_decrypt error\n");
+	else
+		//printf("RSA_private_decrypt: %s\n", decryptMsg);
+	//解析json
+	json = cJSON_Parse((const char *)decryptMsg);
+	if (!json)
+	{
+		printf("Error before: [%s]\n", cJSON_GetErrorPtr());
+	}
+	item = cJSON_GetObjectItem(json, "type");
+	if (!item)
+	{
+		printf("Error before: [%s]\n", cJSON_GetErrorPtr());
+	}
+	int type = getRequestType(item->valuestring);
+	if(type==CONNECT)
+	{
+		item = cJSON_GetObjectItem(json, "data");
+		if (!item)
+		{
+			printf("Error before: [%s]\n", cJSON_GetErrorPtr());
+		}
+
+		memset(clientList[index].nickNme,0,USER_LENGTH_NAME);
+		memset(clientList[index].aes_key,0,USER_LENGTH_KEY);
+		strncpy(clientList[index].nickNme, item->valuestring,5);	//暂用密码当做设备名
+		strcpy(clientList[index].aes_key, item->valuestring);
+
+		json=cJSON_CreateObject();	
+		cJSON_AddStringToObject(json, "type","CON_R");
+		cJSON_AddStringToObject(json, "data","ok");
+		
+		out=cJSON_Print(json);
+		//aes_encrypt(out, clientList[index].aes_key, encrypt_buf);
+		encrypt_buf=getRightEncrypt(out,clientList[index].aes_key);
+		printf("加密结果：\n%s\n", encrypt_buf);
+		send(clientList[index].socket, encrypt_buf, KEY_LENGTH, 0);
+		free(out);
+		free(encrypt_buf);
+		out=NULL;
+		encrypt_buf=NULL; 
+		
+
+		if(0!=strcmp("Siri",clientList[index].nickNme))
+		{
+			printf("新的连接:%s\n", clientList[index].nickNme); //,clientList[index].socket
+			printf("当前在线数:%d\n", getClientCunt());
+		}
+	}else{
+		printf("error in connect type\n");
+	}
 	
 
+
+	//从客户端接收数据	使用aes加密
 	while ((recv_len = recv(connfd, (unsigned char *)recv_buf, sizeof(recv_buf), 0)) > 0)
 	{
-		printf("收到消息:%s:\n",recv_buf);
-		FILE *fp = NULL;
-		RSA *privateRsa = NULL;
-	
-	
-		if ((fp = fopen(PRIVATEKEY, "r")) == NULL) 
-		{
-			printf("private key path error\n");
-			//return -1;
-		}
-		if ((privateRsa = PEM_read_RSAPrivateKey(fp, NULL, NULL, NULL)) == NULL) 
-		{
-			printf("PEM_read_RSAPrivateKey error\n");
-			return NULL;
-		}
-		fclose(fp);
-		
-		int rsa_len = RSA_size(privateRsa);
-		unsigned char *decryptMsg = (unsigned char *)malloc(rsa_len);
-		memset(decryptMsg, 0, rsa_len);
-		printf("rsa_len:%d\n",rsa_len );
-	    
-		int mun =  RSA_private_decrypt(rsa_len, (const unsigned char *)recv_buf, decryptMsg, privateRsa, RSA_PKCS1_PADDING);
-	 
-		if ( mun < 0)
-			printf("RSA_private_decrypt error\n");
-		else
-			printf("RSA_private_decrypt %s\n", decryptMsg);
-		
-		RSA_free(privateRsa);
-
+		printf("收到消息:%s\n",recv_buf);
+		memset(decrypt_buf,0,KEY_LENGTH);
+		aes_decrypt(recv_buf, clientList[index].aes_key, decrypt_buf);
+        printf("解密结果：%s\n", decrypt_buf);
 
 		//解析json
-		json = cJSON_Parse((const char *)decryptMsg);
+		json = cJSON_Parse(decrypt_buf);
 		if (!json)
 		{
 			printf("Error before: [%s]\n", cJSON_GetErrorPtr());
@@ -186,45 +223,14 @@ void *threadConnect(void *vargp)
 		{
 			printf("Error before: [%s]\n", cJSON_GetErrorPtr());
 		}
+		
 		//获取请求类型
 		int type = getRequestType(item->valuestring);
 		switch (type)
 		{
-		case CONNECT:	//处理树莓派的连接请求
-			item = cJSON_GetObjectItem(json, "data");
-			if (!item)
-			{
-				printf("Error before: [%s]\n", cJSON_GetErrorPtr());
-			}
-
-			memset(clientList[index].nickNme,0,USER_LENGTH_NAME);
-			memset(clientList[index].aes_key,0,USER_LENGTH_KEY);
-			strcpy(clientList[index].nickNme, item->valuestring);	//暂用密码当做设备名
-			strcpy(clientList[index].aes_key, item->valuestring);
-
-			json=cJSON_CreateObject();	
-			cJSON_AddStringToObject(json, "type","CON_R");
-			cJSON_AddStringToObject(json, "data","ok");
+		case TEST:
 			
-			out=cJSON_Print(json);
-			aes_encrypt(out, clientList[index].aes_key, encrypt_buffer);
-    		printf("加密结果：\n%s\n", encrypt_buffer);
-			send(clientList[index].socket, encrypt_buffer, strlen(encrypt_buffer), 0);
-			free(out);
-			out=NULL;
-			
-
-			if(0!=strcmp("Siri",clientList[index].nickNme))
-			{
-				printf("新的连接:%s\n", clientList[index].nickNme); //,clientList[index].socket
-				printf("当前在线数:%d\n", getClientCunt());
-			}
-			break;
-		case NORMAL:
-			memset(tem, 0, sizeof(tem));
-			sprintf(tem, "%s[%s]:%s", clientList[index].nickNme, clientList[index].ip, recv_buf + 3);
-			printf("转发消息 : %s\n", tem);
-			broadcast(tem, index);
+			printf("这是一个测试请求!\n");
 			break;
 		case S_CON:	//Siri控制请求
 			item=cJSON_GetObjectItem(json,"data");
@@ -268,9 +274,9 @@ int getRequestType(char *str)
 		return CONNECT;
 	}else if(0==strcmp(str,"S_CON")){	//Siri控制请求
 		return S_CON;
-	}else if(0==strcmp(str,".._")){
+	}else if(0==strcmp(str,"TEST")){
 		//SIRI控制请求
-		return S_CON;
+		return TEST;
 	}
 	
 
@@ -309,7 +315,7 @@ int getClientCunt()
 	{
 		if (clientList[i].socket >0)//!= -1
 		{
-			printf("位置%d已占用,id:%d\n",i,clientList[i].socket);
+			//printf("位置%d已占用,id:%d\n",i,clientList[i].socket);
 			n++;
 		}
 	}
@@ -338,56 +344,54 @@ void sayHello(char *str, char *ip, int index)
 	broadcast(hello, index);
 }
 
-//aes加密
-int aes_encrypt(char* in, char* key, char* out)
+
+void initRsa()
 {
-    if (!in || !key || !out)
-    {
-        return 0;
-    }
- 
-    AES_KEY aes;
-    if (AES_set_encrypt_key((unsigned char*)key, KEY_LENGTH, &aes) < 0)
-    {
-        return 0;
-    }
- 
-    int len = strlen(in), en_len = 0;
- 
-    //输入输出字符串够长。而且是AES_BLOCK_SIZE的整数倍，须要严格限制
-    while (en_len < len)
-    {
-        AES_encrypt((unsigned char*)in, (unsigned char*)out, &aes);
-        in	+= AES_BLOCK_SIZE;
-        out += AES_BLOCK_SIZE;
-        en_len += AES_BLOCK_SIZE;
-    }
- 
-    return 1;
+	//从文件读入RSA私钥
+	FILE *fp = NULL;
+	if ((fp = fopen(PRIVATEKEY, "r")) == NULL) 
+	{
+		printf("private key path error\n");
+		exit(1);
+	}
+	if ((privateRsa = PEM_read_RSAPrivateKey(fp, NULL, NULL, NULL)) == NULL) 
+	{
+		printf("PEM_read_RSAPrivateKey error\n");
+		exit(1);
+	}
+	fclose(fp);
 }
 
-//aes解密
-int aes_decrypt(char* in, char* key, char* out)
-{
-    if (!in || !key || !out)
-    {
-        return 0;
-    }
- 
-    AES_KEY aes;
-    if (AES_set_decrypt_key((unsigned char*)key, KEY_LENGTH, &aes) < 0)
-    {
-        return 0;
-    }
- 
-    int len = strlen(in), en_len = 0;
-    while (en_len < len)
-    {
-        AES_decrypt((unsigned char*)in, (unsigned char*)out, &aes);
-        in	+= AES_BLOCK_SIZE;
-        out += AES_BLOCK_SIZE;
-        en_len += AES_BLOCK_SIZE;
-    }
- 
-    return 1;
-}
+/*
+		case CONNECT:	//处理树莓派的连接请求
+		
+			item = cJSON_GetObjectItem(json, "data");
+			if (!item)
+			{
+				printf("Error before: [%s]\n", cJSON_GetErrorPtr());
+			}
+
+			memset(clientList[index].nickNme,0,USER_LENGTH_NAME);
+			memset(clientList[index].aes_key,0,USER_LENGTH_KEY);
+			strcpy(clientList[index].nickNme, item->valuestring);	//暂用密码当做设备名
+			strcpy(clientList[index].aes_key, item->valuestring);
+
+			json=cJSON_CreateObject();	
+			cJSON_AddStringToObject(json, "type","CON_R");
+			cJSON_AddStringToObject(json, "data","ok");
+			
+			out=cJSON_Print(json);
+			aes_encrypt(out, clientList[index].aes_key, encrypt_buf);
+    		printf("加密结果：\n%s\n", encrypt_buf);
+			send(clientList[index].socket, encrypt_buf, strlen(encrypt_buf), 0);
+			free(out);
+			out=NULL;
+			
+
+			if(0!=strcmp("Siri",clientList[index].nickNme))
+			{
+				printf("新的连接:%s\n", clientList[index].nickNme); //,clientList[index].socket
+				printf("当前在线数:%d\n", getClientCunt());
+			}
+			break;
+			*/
