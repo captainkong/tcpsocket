@@ -15,27 +15,32 @@
 #include <pthread.h>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
+#include <openssl/aes.h>
+#include <openssl/bn.h>
 #include "../lib/cJSON/cJSON.h"
 
 
 //请求类型
 #define CONNECT 1 	//请求连接
-#define NORMAL	2 	//聊天内容
+#define CON_R	2 	//请求状态返回
 #define S_CON 	3   //SIRI控制请求
 #define CLOSE 	4	//关闭连接请求
 
-#define PUBLICKEY "rsa_public_key.pem"
-#define PRIVATEKEY "rsa_private_key.pem"
+#define KEY_LENGTH  256						//AES加密密钥长度(注意服务端空间)
+#define PUBLICKEY 	"rsa_public_key.pem"	//公钥位置
+#define PRIVATEKEY	"rsa_private_key.pem"
 
+/*      全局变量    */
+char aes_key[65];	//存贮对称密钥
 
+int aes_decrypt(char* in, char* key, char* out);
+int aes_encrypt(char* in, char* key, char* out);
 void *threadrecv(void *vargp);
-int getRequestType(char *str);	//获取请求类型
-
-char aes_key[130];	//存贮对称密钥
+int getRequestType(char *str);
 
 int main(int argc, char *argv[])
 {
-	unsigned short port = 8000;				// 服务器的端口号
+	unsigned short port = 8000;		// 服务器的端口号
 	char *server_ip = "127.0.0.1";	// 服务器ip地址
 
 	char name[10]="PI";
@@ -64,9 +69,25 @@ int main(int argc, char *argv[])
 		exit(-1);
 	}
 
+	//生成密钥
+    BIGNUM *rnd;
+	rnd = BN_new();
+	int length;
+	char * key;
+
+	int top =0;
+	int bottom = 0;
+
+	BN_rand(rnd,KEY_LENGTH,top,bottom);	
+	length = BN_num_bits(rnd);
+	key = BN_bn2hex(rnd);
+	strcpy(aes_key,key);
+	printf("length:%d,\nkey:%s.\naes_key:%s\n",length,key,aes_key);
+	BN_free(rnd);
+
 	cJSON* root=cJSON_CreateObject();	
 	cJSON_AddStringToObject(root, "type","CONNECT");
-	cJSON_AddStringToObject(root, "data","这是一个中文测试,希望你能完整看到它");
+	cJSON_AddStringToObject(root, "data",key);
 	
     unsigned char * out=(unsigned char *)cJSON_Print(root);
 	cJSON_Delete(root);
@@ -97,7 +118,6 @@ int main(int argc, char *argv[])
 	if ((privateRsa = PEM_read_RSAPrivateKey(fp, NULL, NULL, NULL)) == NULL) 
 	{
 		printf("PEM_read_RSAPrivateKey error\n");
-		return NULL;
 	}
 	fclose(fp);		
 	
@@ -150,17 +170,24 @@ void *threadrecv(void *vargp)
 {
 	int sockfd = *((int *)vargp);
 	char recv_buf[512];
+	char decrypt_buf[KEY_LENGTH];
 	cJSON *json,*item;	//用完free
+	
 
 	while (1)
 	{
 		//从服务器接收消息
 		memset(recv_buf, 0, sizeof(recv_buf));
+		memset(recv_buf, 0, sizeof(recv_buf));
 		recv(sockfd, recv_buf, sizeof(recv_buf), 0); // 接收服务器发回的信息
-		printf("%s\n",recv_buf );	
+
+		printf("收到来自服务器的消息:\n%s\n",recv_buf );
+		
+		aes_decrypt(recv_buf, aes_key, decrypt_buf);
+        printf("解密结果：%s\n", decrypt_buf);
 
 		//解析json
-		json = cJSON_Parse(recv_buf);
+		json = cJSON_Parse(decrypt_buf);
 		if (!json)
 		{
 			printf("Error before: [%s]\n", cJSON_GetErrorPtr());
@@ -178,8 +205,8 @@ void *threadrecv(void *vargp)
 		case CONNECT:
 			
 			break;
-		case NORMAL:
-			
+		case CON_R:
+			printf("this is a CON_R con test!\n");
 			break;
 		case S_CON:	//Siri控制请求
 			printf("this is a si con test!\n");
@@ -201,9 +228,64 @@ int getRequestType(char *str)
 		return CONNECT;
 	}else if(0==strcmp(str,"S_CON")){	//Siri控制请求
 		return S_CON;
-	}else if(0==strcmp(str,".._")){
+	}else if(0==strcmp(str,"CON_R")){
 		//SIRI控制请求
-		return S_CON;
+		return CON_R;
 	}
 	return 0;
 }
+
+//aes加密
+int aes_encrypt(char* in, char* key, char* out)
+{
+    if (!in || !key || !out)
+    {
+        return 0;
+    }
+ 
+    AES_KEY aes;
+    if (AES_set_encrypt_key((unsigned char*)key, KEY_LENGTH, &aes) < 0)
+    {
+        return 0;
+    }
+ 
+    int len = strlen(in), en_len = 0;
+ 
+    //输入输出字符串够长。而且是AES_BLOCK_SIZE的整数倍，须要严格限制
+    while (en_len < len)
+    {
+        AES_encrypt((unsigned char*)in, (unsigned char*)out, &aes);
+        in	+= AES_BLOCK_SIZE;
+        out += AES_BLOCK_SIZE;
+        en_len += AES_BLOCK_SIZE;
+    }
+ 
+    return 1;
+}
+
+//aes解密
+int aes_decrypt(char* in, char* key, char* out)
+{
+    if (!in || !key || !out)
+    {
+        return 0;
+    }
+ 
+    AES_KEY aes;
+    if (AES_set_decrypt_key((unsigned char*)key, KEY_LENGTH, &aes) < 0)
+    {
+        return 0;
+    }
+ 
+    int len = strlen(in), en_len = 0;
+    while (en_len < len)
+    {
+        AES_decrypt((unsigned char*)in, (unsigned char*)out, &aes);
+        in	+= AES_BLOCK_SIZE;
+        out += AES_BLOCK_SIZE;
+        en_len += AES_BLOCK_SIZE;
+    }
+ 
+    return 1;
+}
+ 
