@@ -1,3 +1,7 @@
+/**
+ * 功能:作为服务端,客户端包括树莓派和同一服务器下的Siri调用程序(响应网页的指令)
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -129,10 +133,11 @@ void *threadConnect(void *vargp)
 {
 
 	size_t recv_len = 0;
-	char recv_buf[512]; // 接收缓冲区
+	char recv_buf[KEY_LENGTH]; // 接收缓冲区
+	char tem[KEY_LENGTH];
 	char *encrypt_buf;
 	char decrypt_buf[KEY_LENGTH];
-	char tem[2048];
+	
 	char * out;
 	int connfd = *((int *)vargp);
 	int index = getIndexBySocket(connfd);
@@ -141,18 +146,15 @@ void *threadConnect(void *vargp)
 
 	//接收连接信息	本消息使用公钥加密
 	recv_len = recv(connfd, (unsigned char *)recv_buf, sizeof(recv_buf), 0);
-	//printf("收到连接消息:%s:\n",recv_buf);
 	int rsa_len = RSA_size(privateRsa);
 	unsigned char *decryptMsg = (unsigned char *)malloc(rsa_len);
 	memset(decryptMsg, 0, rsa_len);
-	//printf("rsa_len:%d\n",rsa_len );
 	//解密消息
 	int mun =  RSA_private_decrypt(rsa_len, (const unsigned char *)recv_buf, decryptMsg, privateRsa, RSA_PKCS1_PADDING);
 	memset(recv_buf, 0, sizeof(recv_buf));
 	if ( mun < 0)
 		printf("!!!!!!!!!!RSA_private_decrypt error\n");
-	else
-		//printf("RSA_private_decrypt: %s\n", decryptMsg);
+	
 	//解析json
 	json = cJSON_Parse((const char *)decryptMsg);
 	if (!json)
@@ -362,36 +364,3 @@ void initRsa()
 	fclose(fp);
 }
 
-/*
-		case CONNECT:	//处理树莓派的连接请求
-		
-			item = cJSON_GetObjectItem(json, "data");
-			if (!item)
-			{
-				printf("Error before: [%s]\n", cJSON_GetErrorPtr());
-			}
-
-			memset(clientList[index].nickNme,0,USER_LENGTH_NAME);
-			memset(clientList[index].aes_key,0,USER_LENGTH_KEY);
-			strcpy(clientList[index].nickNme, item->valuestring);	//暂用密码当做设备名
-			strcpy(clientList[index].aes_key, item->valuestring);
-
-			json=cJSON_CreateObject();	
-			cJSON_AddStringToObject(json, "type","CON_R");
-			cJSON_AddStringToObject(json, "data","ok");
-			
-			out=cJSON_Print(json);
-			aes_encrypt(out, clientList[index].aes_key, encrypt_buf);
-    		printf("加密结果：\n%s\n", encrypt_buf);
-			send(clientList[index].socket, encrypt_buf, strlen(encrypt_buf), 0);
-			free(out);
-			out=NULL;
-			
-
-			if(0!=strcmp("Siri",clientList[index].nickNme))
-			{
-				printf("新的连接:%s\n", clientList[index].nickNme); //,clientList[index].socket
-				printf("当前在线数:%d\n", getClientCunt());
-			}
-			break;
-			*/
