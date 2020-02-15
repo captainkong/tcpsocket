@@ -31,7 +31,7 @@ typedef struct _client_type			//设备结构体
 {
 	char ip[INET_ADDRSTRLEN]; 		//字符串ip
 	int socket;				 		//套接字
-	char nickNme[USER_LENGTH_KEY];	//设备名
+	char nickName[USER_LENGTH_KEY];	//设备名
 	char aes_key[USER_LENGTH_NAME];	//加密密钥(十六进制,注意长度)
 } client;
 
@@ -131,8 +131,6 @@ int main(int argc, char *argv[])
 
 void *threadConnect(void *vargp)
 {
-
-	size_t recv_len = 0;
 	char recv_buf[KEY_LENGTH]; // 接收缓冲区
 	char tem[KEY_LENGTH];
 	char *encrypt_buf;
@@ -144,78 +142,116 @@ void *threadConnect(void *vargp)
 	memset(recv_buf, 0, sizeof(recv_buf));
 	cJSON *json,*item;	//用完free
 
-	//接收连接信息	本消息使用公钥加密
-	recv_len = recv(connfd, (unsigned char *)recv_buf, sizeof(recv_buf), 0);
-	int rsa_len = RSA_size(privateRsa);
-	unsigned char *decryptMsg = (unsigned char *)malloc(rsa_len);
-	memset(decryptMsg, 0, rsa_len);
-	//解密消息
-	int mun =  RSA_private_decrypt(rsa_len, (const unsigned char *)recv_buf, decryptMsg, privateRsa, RSA_PKCS1_PADDING);
-	memset(recv_buf, 0, sizeof(recv_buf));
-	if ( mun < 0)
-		printf("!!!!!!!!!!RSA_private_decrypt error\n");
-	
-	//解析json
-	json = cJSON_Parse((const char *)decryptMsg);
-	if (!json)
-	{
-		printf("Error before: [%s]\n", cJSON_GetErrorPtr());
-	}
-	item = cJSON_GetObjectItem(json, "type");
-	if (!item)
-	{
-		printf("Error before: [%s]\n", cJSON_GetErrorPtr());
-	}
-	int type = getRequestType(item->valuestring);
-	if(type==CONNECT)
-	{
-		item = cJSON_GetObjectItem(json, "data");
+	memset(clientList[index].nickName,0,USER_LENGTH_NAME);
+	memset(clientList[index].aes_key,0,USER_LENGTH_KEY);
+
+	//接收连接信息	此线程可以用来处理来自树莓派的加密信息,也可以处理来自本机的未加密信息
+	//拒绝所有非内网连接的非加密信息
+	recv(connfd, (unsigned char *)recv_buf, sizeof(recv_buf), 0);
+	printf("收到%s\n",recv_buf);
+	if(cJSON_Parse((const char *)recv_buf))
+	{	//来自本地连接
+		if(0!=strcmp(clientList[index].ip,"127.0.0.1"))
+		{	//不是来自本地,非法请求
+			printf("非法请求!\n");
+			json=cJSON_CreateObject();	
+			cJSON_AddStringToObject(json, "type","CON_R");
+			cJSON_AddStringToObject(json, "data","error");
+			out=cJSON_Print(json);
+			send(clientList[index].socket, out, strlen(out), 0);
+			clientList[index].socket=-1;
+			free(out);
+			out=NULL;
+			//close(connfd); 			//关闭已连接套接字 会崩溃
+			cJSON_Delete(json);		//清空json
+			return NULL;
+		}
+		strcpy(clientList[index].nickName, "Siri");	
+		json=cJSON_CreateObject();	
+		cJSON_AddStringToObject(json, "type","CON_R");
+		cJSON_AddStringToObject(json, "data","ok");
+		out=cJSON_Print(json);
+		send(clientList[index].socket, out, strlen(out), 0);
+		free(out);
+		out=NULL;
+
+	}else{
+		//来自远程
+		int rsa_len = RSA_size(privateRsa);
+		unsigned char *decryptMsg = (unsigned char *)malloc(rsa_len);
+		memset(decryptMsg, 0, rsa_len);
+		//解密消息
+		int mun =  RSA_private_decrypt(rsa_len, (const unsigned char *)recv_buf, decryptMsg, privateRsa, RSA_PKCS1_PADDING);
+		memset(recv_buf, 0, sizeof(recv_buf));
+		if ( mun < 0)
+			printf("!!!!!!!!!!RSA_private_decrypt error\n");
+		
+		//解析json
+		json = cJSON_Parse((const char *)decryptMsg);
+		if (!json)
+		{
+			printf("Error before: [%s]\n", cJSON_GetErrorPtr());
+		}
+		item = cJSON_GetObjectItem(json, "type");
 		if (!item)
 		{
 			printf("Error before: [%s]\n", cJSON_GetErrorPtr());
 		}
-
-		memset(clientList[index].nickNme,0,USER_LENGTH_NAME);
-		memset(clientList[index].aes_key,0,USER_LENGTH_KEY);
-		strncpy(clientList[index].nickNme, item->valuestring,5);	//暂用密码当做设备名
-		strcpy(clientList[index].aes_key, item->valuestring);
-
-		json=cJSON_CreateObject();	
-		cJSON_AddStringToObject(json, "type","CON_R");
-		cJSON_AddStringToObject(json, "data","ok");
-		
-		out=cJSON_Print(json);
-		//aes_encrypt(out, clientList[index].aes_key, encrypt_buf);
-		encrypt_buf=getRightEncrypt(out,clientList[index].aes_key);
-		printf("加密结果：\n%s\n", encrypt_buf);
-		send(clientList[index].socket, encrypt_buf, KEY_LENGTH, 0);
-		free(out);
-		free(encrypt_buf);
-		out=NULL;
-		encrypt_buf=NULL; 
-		
-
-		if(0!=strcmp("Siri",clientList[index].nickNme))
+		int type = getRequestType(item->valuestring);
+		if(type==CONNECT)
 		{
-			printf("新的连接:%s\n", clientList[index].nickNme); //,clientList[index].socket
-			printf("当前在线数:%d\n", getClientCunt());
+			item = cJSON_GetObjectItem(json, "data");
+			if (!item)
+			{
+				printf("Error before: [%s]\n", cJSON_GetErrorPtr());
+			}
+
+			memset(clientList[index].nickName,0,USER_LENGTH_NAME);
+			memset(clientList[index].aes_key,0,USER_LENGTH_KEY);
+			strncpy(clientList[index].nickName, item->valuestring,5);	//暂用密码当做设备名
+			strcpy(clientList[index].aes_key, item->valuestring);
+
+			json=cJSON_CreateObject();	
+			cJSON_AddStringToObject(json, "type","CON_R");
+			cJSON_AddStringToObject(json, "data","ok");
+			
+			out=cJSON_Print(json);
+			//aes_encrypt(out, clientList[index].aes_key, encrypt_buf);
+			encrypt_buf=getRightEncrypt(out,clientList[index].aes_key);
+			printf("加密结果：\n%s\n", encrypt_buf);
+			send(clientList[index].socket, encrypt_buf, KEY_LENGTH, 0);
+			free(out);
+			free(encrypt_buf);
+			out=NULL;
+			encrypt_buf=NULL; 
+			
+
+			if(0!=strcmp("Siri",clientList[index].nickName))
+			{
+				printf("新的连接:%s\n", clientList[index].nickName); //,clientList[index].socket
+				printf("当前在线数:%d\n", getClientCunt());
+			}
+		}else{
+			printf("error in connect type\n");
 		}
-	}else{
-		printf("error in connect type\n");
+		
 	}
-	
-
-
+	memset(recv_buf, 0, sizeof(recv_buf));
 	//从客户端接收数据	使用aes加密
-	while ((recv_len = recv(connfd, (unsigned char *)recv_buf, sizeof(recv_buf), 0)) > 0)
+	while ((recv(connfd, (unsigned char *)recv_buf, sizeof(recv_buf), 0)) > 0)
 	{
 		printf("收到消息:%s\n",recv_buf);
 		memset(decrypt_buf,0,KEY_LENGTH);
-		aes_decrypt(recv_buf, clientList[index].aes_key, decrypt_buf);
-        printf("解密结果：%s\n", decrypt_buf);
-
-		//解析json
-		json = cJSON_Parse(decrypt_buf);
+		if(0!=strcmp(clientList[index].nickName,"Siri")){
+			aes_decrypt(recv_buf, clientList[index].aes_key, decrypt_buf);
+			printf("解密结果：%s\n", decrypt_buf);
+			//解析json
+			json = cJSON_Parse(decrypt_buf);
+		}else{
+			//解析json 本地未加密信息
+			json = cJSON_Parse(recv_buf);
+		}
+		
 		if (!json)
 		{
 			printf("Error before: [%s]\n", cJSON_GetErrorPtr());
@@ -259,13 +295,13 @@ void *threadConnect(void *vargp)
 	cJSON_Delete(json);	//清空json
 	
 	clientList[index].socket = -1;
-	if(0!=strcmp("Siri",clientList[index].nickNme))
+	if(0!=strcmp("Siri",clientList[index].nickName))
 	{
-		printf("%s[%s]离开聊天室!\n", clientList[index].nickNme, clientList[index].ip);
+		printf("%s[%s]离开聊天室!\n", clientList[index].nickName, clientList[index].ip);
 		printf("当前在线数:%d\n", getClientCunt());
 	}
 	memset(recv_buf, 0, sizeof(recv_buf));
-	memset(clientList[index].nickNme, 0, sizeof(clientList[index].nickNme));
+	memset(clientList[index].nickName, 0, sizeof(clientList[index].nickName));
 	return NULL;
 }
 

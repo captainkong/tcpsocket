@@ -28,8 +28,7 @@ int main(int argc, char *argv[])
 
 	unsigned short port = 8000;		// 服务器的端口号
 	char *server_ip = "127.0.0.1";	// 服务器ip地址
-
-	char name[10]="Siri";
+	//char name[10]="Siri";
 	int sockfd = 0;
 	int err_log = 0;
 	struct sockaddr_in server_addr;
@@ -56,11 +55,10 @@ int main(int argc, char *argv[])
 
 	cJSON* root=cJSON_CreateObject();	
 	cJSON_AddStringToObject(root, "type","CONNECT");
-	cJSON_AddStringToObject(root, "data",name);
-	
+	cJSON_AddStringToObject(root, "data","siri");
     char * out=cJSON_Print(root);
 	cJSON_Delete(root);
-	
+	printf("发送:%s\n",out);
 	send(sockfd, out, strlen(out), 0); // 向服务器发送信息
 	free(out);
 
@@ -97,9 +95,46 @@ void *threadrecv(void *vargp)
 {
 	int sockfd = *((int *)vargp);
 	char recv_buf[512];
+	cJSON *json,*item;
 	memset(recv_buf, 0, sizeof(recv_buf));
+
+	
 	recv(sockfd, recv_buf, sizeof(recv_buf), 0); // 接收服务器发回的信息
-	printf("%s\n",recv_buf );	
+	printf("%s\n",recv_buf );
+	json = cJSON_Parse((const char *)recv_buf);
+	if (!json)
+	{
+		printf("Error before: [%s]\n", cJSON_GetErrorPtr());
+	}
+	item = cJSON_GetObjectItem(json, "type");
+	if (!item)
+	{
+		printf("Error before: [%s]\n", cJSON_GetErrorPtr());
+	}
+	if(0==strcmp(item->valuestring,"CON_R"))
+	{
+		item = cJSON_GetObjectItem(json, "data");
+		if (!item)
+		{
+			printf("Error before: [%s]\n", cJSON_GetErrorPtr());
+		}
+		if(0==strcmp(item->valuestring,"error")){
+			cJSON* root=cJSON_CreateObject();	
+			cJSON_AddStringToObject(root, "type","S_CON");
+			cJSON_AddStringToObject(root, "data","arg");
+			
+			char * out=cJSON_Print(root);
+			cJSON_Delete(root);
+			//printf("%s\n",out);
+			
+			send(sockfd, out, strlen(out), 0); // 向服务器发送信息
+			free(out);
+			printf("发生错误,主动断开!\n");
+			exit(1);
+		}
+	}
+	
+	
 	return NULL;
 }
 
