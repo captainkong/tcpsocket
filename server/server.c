@@ -12,26 +12,33 @@
 #include <arpa/inet.h>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
+#include <mysql/mysql.h>
 #include "../lib/cJSON/cJSON.h"
 #include "../lib/openssl/operate_aes.h"  
 
 #define PRIVATEKEY 			"rsa_private_key.pem"
+#define	SIRI_NAME			"Siri响应程序"
 #define CLIENT_MAX_COUNT	5	//最大连接数量
 #define	USER_LENGTH_KEY		65	//aes密钥长度(十六进制字符串)
 #define	USER_LENGTH_NAME	65	//设备名长度
+#define	USER_LENGTH_MAC		18	//设备MAC地址长度
 
 
 //服务请求类型
-#define CONNECT 1 //请求连接
-#define NORMAL	2  //聊天内容
-#define S_CON 	3   //SIRI控制请求
-#define TEST 	4	//请求下载文件
+#define NORMAL		2  	//聊天内容
+#define S_CON 		3   //SIRI控制请求
+#define TEST		4	//请求下载文件
+#define PI_CONNECT	5 	//树莓派请求连接
+#define SI_CONNECT	6 	//SIRI响应程序派请求连接P_DATA
+#define DATA_ONLE	7	//客户端在线时树莓派发来消息
+#define DATA_OFFLE	8	//客户端离线时树莓派发来消息
 
 typedef struct _client_type			//设备结构体
 {
 	char ip[INET_ADDRSTRLEN]; 		//字符串ip
 	int socket;				 		//套接字
 	char nickName[USER_LENGTH_KEY];	//设备名
+	char macAddr[USER_LENGTH_MAC];	//设备MAC地址
 	char aes_key[USER_LENGTH_NAME];	//加密密钥(十六进制,注意长度)
 } client;
 
@@ -41,14 +48,24 @@ void broadcast(char *str, int except);
 void initRsa();
 int getClientCunt();
 int getIndexBySocket(int socket);
+int getIndexByMac(char *str);
 int getFreeIndex();
 int getRequestType(char *str);
+int executesql(const char * sql);
+int init_mysql();
+void print_mysql_error(const char *msg);
 
-
+//数据库相关
+const char *g_host_name = "localhost";
+const char *g_user_name = "root";
+const char *g_password = "RbzNahIdHG3J2587";
+const char *g_db_name = "pi";
+const unsigned int g_db_port = 3306;
 
 /*      全局变量    */
 client clientList[CLIENT_MAX_COUNT];
 RSA *privateRsa = NULL;
+MYSQL *sqlCon; // mysql 连接
 
 
 int main(int argc, char *argv[])
@@ -96,6 +113,11 @@ int main(int argc, char *argv[])
 		exit(-1);
 	}
 
+	if (init_mysql())
+       print_mysql_error(NULL);
+	else
+		printf("connect to MySQL\n");
+
 	printf("Waiting client...\n");
 
 	while (1)
@@ -135,20 +157,24 @@ void *threadConnect(void *vargp)
 	char tem[KEY_LENGTH];
 	char *encrypt_buf;
 	char decrypt_buf[KEY_LENGTH];
+	MYSQL_RES *g_res; // mysql 记录集
+	MYSQL_ROW g_row; // 字符串数组，mysql 记录行
 	
 	char * out;
 	int connfd = *((int *)vargp);
 	int index = getIndexBySocket(connfd);
 	memset(recv_buf, 0, sizeof(recv_buf));
 	cJSON *json,*item;	//用完free
-
+	memset(recv_buf, 0, sizeof(recv_buf));
 	memset(clientList[index].nickName,0,USER_LENGTH_NAME);
 	memset(clientList[index].aes_key,0,USER_LENGTH_KEY);
+	memset(clientList[index].macAddr,0,USER_LENGTH_MAC);
+	
 
 	//接收连接信息	此线程可以用来处理来自树莓派的加密信息,也可以处理来自本机的未加密信息
 	//拒绝所有非内网连接的非加密信息
 	recv(connfd, (unsigned char *)recv_buf, sizeof(recv_buf), 0);
-	printf("收到%s\n",recv_buf);
+	//printf("收到%d:%s\n",(int)strlen(recv_buf),recv_buf);
 	if(cJSON_Parse((const char *)recv_buf))
 	{	//来自本地连接
 		if(0!=strcmp(clientList[index].ip,"127.0.0.1"))
@@ -166,7 +192,7 @@ void *threadConnect(void *vargp)
 			cJSON_Delete(json);		//清空json
 			return NULL;
 		}
-		strcpy(clientList[index].nickName, "Siri");	
+		strcpy(clientList[index].nickName, SIRI_NAME);	
 		json=cJSON_CreateObject();	
 		cJSON_AddStringToObject(json, "type","CON_R");
 		cJSON_AddStringToObject(json, "data","ok");
@@ -184,7 +210,17 @@ void *threadConnect(void *vargp)
 		int mun =  RSA_private_decrypt(rsa_len, (const unsigned char *)recv_buf, decryptMsg, privateRsa, RSA_PKCS1_PADDING);
 		memset(recv_buf, 0, sizeof(recv_buf));
 		if ( mun < 0)
-			printf("!!!!!!!!!!RSA_private_decrypt error\n");
+		{
+			char str[]="ERROR!\n";
+			send(clientList[index].socket, str, strlen(str), 0);
+			memset(clientList[index].nickName,0,USER_LENGTH_NAME);
+			memset(clientList[index].aes_key,0,USER_LENGTH_KEY);
+			memset(clientList[index].macAddr,0,USER_LENGTH_MAC);
+			close(connfd);
+			printf("异常线程即将退出...\n");
+			clientList[index].socket = -1;
+			return NULL;
+		}
 		
 		//解析json
 		json = cJSON_Parse((const char *)decryptMsg);
@@ -198,7 +234,7 @@ void *threadConnect(void *vargp)
 			printf("Error before: [%s]\n", cJSON_GetErrorPtr());
 		}
 		int type = getRequestType(item->valuestring);
-		if(type==CONNECT)
+		if(type==PI_CONNECT)
 		{
 			item = cJSON_GetObjectItem(json, "data");
 			if (!item)
@@ -208,17 +244,24 @@ void *threadConnect(void *vargp)
 
 			memset(clientList[index].nickName,0,USER_LENGTH_NAME);
 			memset(clientList[index].aes_key,0,USER_LENGTH_KEY);
-			strncpy(clientList[index].nickName, item->valuestring,5);	//暂用密码当做设备名
+			memset(clientList[index].macAddr,0,USER_LENGTH_MAC);
+			
 			strcpy(clientList[index].aes_key, item->valuestring);
+			item = cJSON_GetObjectItem(json, "mac");
+			if (!item)
+			{
+				printf("Error before: [%s]\n", cJSON_GetErrorPtr());
+			}
+			strcpy(clientList[index].macAddr, item->valuestring);
+			strcpy(clientList[index].nickName, item->valuestring);	//暂用mac地址当做设备名
 
-			json=cJSON_CreateObject();	
+			json=cJSON_CreateObject();
 			cJSON_AddStringToObject(json, "type","CON_R");
 			cJSON_AddStringToObject(json, "data","ok");
 			
 			out=cJSON_Print(json);
-			//aes_encrypt(out, clientList[index].aes_key, encrypt_buf);
 			encrypt_buf=getRightEncrypt(out,clientList[index].aes_key);
-			printf("加密结果：\n%s\n", encrypt_buf);
+			//printf("加密结果：\n%s\n", encrypt_buf);
 			send(clientList[index].socket, encrypt_buf, KEY_LENGTH, 0);
 			free(out);
 			free(encrypt_buf);
@@ -226,13 +269,11 @@ void *threadConnect(void *vargp)
 			encrypt_buf=NULL; 
 			
 
-			if(0!=strcmp("Siri",clientList[index].nickName))
+			if(0!=strcmp(SIRI_NAME,clientList[index].nickName))
 			{
 				printf("新的连接:%s\n", clientList[index].nickName); //,clientList[index].socket
 				printf("当前在线数:%d\n", getClientCunt());
 			}
-		}else{
-			printf("error in connect type\n");
 		}
 		
 	}
@@ -240,11 +281,14 @@ void *threadConnect(void *vargp)
 	//从客户端接收数据	使用aes加密
 	while ((recv(connfd, (unsigned char *)recv_buf, sizeof(recv_buf), 0)) > 0)
 	{
-		printf("收到消息:%s\n",recv_buf);
+		//printf("收到消息:%s\n",recv_buf);
 		memset(decrypt_buf,0,KEY_LENGTH);
-		if(0!=strcmp(clientList[index].nickName,"Siri")){
-			aes_decrypt(recv_buf, clientList[index].aes_key, decrypt_buf);
-			printf("解密结果：%s\n", decrypt_buf);
+		if(0!=strcmp(clientList[index].nickName,SIRI_NAME)){
+			if(0==aes_decrypt(recv_buf, clientList[index].aes_key, decrypt_buf))
+			{
+				printf("解密失败!!!!!\n");
+			}
+			//printf("解密结果：%s\n", decrypt_buf);
 			//解析json
 			json = cJSON_Parse(decrypt_buf);
 		}else{
@@ -267,23 +311,134 @@ void *threadConnect(void *vargp)
 		switch (type)
 		{
 		case TEST:
-			
 			printf("这是一个测试请求!\n");
+			break;
+		case DATA_ONLE:	//在线时树莓派发送的数据
+			//printf("收到数据流:%s\n",decrypt_buf);
+			sprintf(tem,"insert into data_online values(NULL,'%s',%d,%d,%d,%d,%d,%d,now())",
+			clientList[index].macAddr,
+			cJSON_GetObjectItem(json,"pm1.0")->valueint,
+			cJSON_GetObjectItem(json,"pm2.5")->valueint,
+			cJSON_GetObjectItem(json,"pm10")->valueint,
+			cJSON_GetObjectItem(json,"temperature")->valueint,
+			cJSON_GetObjectItem(json,"humidity")->valueint,
+			cJSON_GetObjectItem(json,"danger")->valueint);
+			printf("执行%s\n",tem);
+			if (executesql(tem)) // 句末没有分号
+        		print_mysql_error(NULL);
+			else
+				//printf("成功插入一条数据!\n");
+			
 			break;
 		case S_CON:	//Siri控制请求
 			item=cJSON_GetObjectItem(json,"data");
-			sprintf(tem, "已收到来自Siri的信息:%s",  item->valuestring);
-			send(clientList[index].socket, tem, strlen(tem), 0);
+			
 			printf("收到来自Siri的信息 : %s\n", item->valuestring);
+			int macInIndex=getIndexByMac("b8:27:eb:20:48:4b");
+			if(macInIndex==-1)
+			{
+				json=cJSON_CreateObject();
+				cJSON_AddStringToObject(json, "type","CON_R");
+				cJSON_AddStringToObject(json, "data","NOT ON LINE!");
+				out=cJSON_Print(json);
+				encrypt_buf=getRightEncrypt(out,clientList[macInIndex].aes_key);
+				send(clientList[index].socket, encrypt_buf, strlen(encrypt_buf), 0);
+				free(out);
+				out=NULL;//退出线程
+				memset(clientList[index].nickName,0,USER_LENGTH_NAME);
+				memset(clientList[index].aes_key,0,USER_LENGTH_KEY);
+				memset(clientList[index].macAddr,0,USER_LENGTH_MAC);
+				close(connfd);
+				printf("SIRI控制线程即将退出...\n");
+				clientList[index].socket = -1;
+				return NULL;
+			}
+			if(0==strcmp("buon",item->valuestring))	//打开蜂鸣器指令
+			{//  b8:27:eb:20:48:4b 52:54:00:cc:3b:e4
+				json=cJSON_CreateObject();	
+				cJSON_AddStringToObject(json, "type","S_CON");
+				cJSON_AddStringToObject(json, "data","buon");
+				out=cJSON_Print(json);
+				encrypt_buf=getRightEncrypt(out,clientList[macInIndex].aes_key);
+				send(clientList[macInIndex].socket, encrypt_buf, strlen(encrypt_buf), 0);
+				free(out);
+				out=NULL;
+				//状态返回
+				cJSON_Delete(json);	//清空json
+				json=cJSON_CreateObject();	
+				cJSON_AddStringToObject(json, "type","CON_R");
+				cJSON_AddStringToObject(json, "data","已打开蜂鸣器");
+				out=cJSON_Print(json);
+				send(clientList[index].socket, out, strlen(out), 0);
+				printf("已发送给反馈程序%s:\n",out);
+				free(out);
+				out=NULL;
+			}else if(0==strcmp("buoff",item->valuestring))	//关闭蜂鸣器指令
+			{//  b8:27:eb:20:48:4b 52:54:00:cc:3b:e4
+				json=cJSON_CreateObject();	
+				cJSON_AddStringToObject(json, "type","S_CON");
+				cJSON_AddStringToObject(json, "data","buoff");
+				out=cJSON_Print(json);
+				encrypt_buf=getRightEncrypt(out,clientList[macInIndex].aes_key);
+				send(clientList[macInIndex].socket, encrypt_buf, strlen(encrypt_buf), 0);
+				//printf("....已发送%s\n",encrypt_buf);
+				free(out);
+				out=NULL;
+				//状态返回
+				cJSON_Delete(json);	//清空json
+				json=cJSON_CreateObject();	
+				cJSON_AddStringToObject(json, "type","CON_R");
+				cJSON_AddStringToObject(json, "data","已关闭蜂鸣器");
+				out=cJSON_Print(json);
+				send(clientList[index].socket, out, strlen(out), 0);
+				printf("已发送给反馈程序%s:\n",out);
+				free(out);
+				out=NULL;
+			}else if(0==strcmp("get_data",item->valuestring))	//获取数据
+			{
+				if (executesql("select pm25,round(temperature/10,1),round(humidity/10,1) from data_online order by did desc limit 1")) // 句末没有分号
+        			print_mysql_error(NULL);
+				g_res = mysql_store_result(sqlCon);
+				while ((g_row=mysql_fetch_row(g_res))) // 打印结果集
+        			sprintf(tem,"温度:%s,湿度:%s,PM2.5指数:%s", g_row[1], g_row[2],g_row[0]); // 第一，第二字段
+				json=cJSON_CreateObject();	
+				cJSON_AddStringToObject(json, "type","CON_R");
+				cJSON_AddStringToObject(json, "data",tem);
+				out=cJSON_Print(json);
+				send(clientList[index].socket, out, strlen(out), 0);
+				printf("已发送给反馈程序%s:\n",out);
+				memset(tem, 0, KEY_LENGTH);
+				free(out);
+				out=NULL;
+			}else if(0==strcmp("G_DATA",item->valuestring))	//打开数据流
+			{//  b8:27:eb:20:48:4b 52:54:00:cc:3b:e4
+				json=cJSON_CreateObject();	
+				cJSON_AddStringToObject(json, "type","S_CON");
+				cJSON_AddStringToObject(json, "data","G_DATA");
+				out=cJSON_Print(json);
+				encrypt_buf=getRightEncrypt(out,clientList[macInIndex].aes_key);
+				send(clientList[macInIndex].socket, encrypt_buf, strlen(encrypt_buf), 0);
+				//printf("....已发送%s\n",encrypt_buf);
+				free(out);
+				out=NULL;
+				
+			}else if(0==strcmp("S_DATA",item->valuestring))	//关闭数据流
+			{//  b8:27:eb:20:48:4b 52:54:00:cc:3b:e4
+				json=cJSON_CreateObject();	
+				cJSON_AddStringToObject(json, "type","S_CON");
+				cJSON_AddStringToObject(json, "data","S_DATA");
+				out=cJSON_Print(json);
+				encrypt_buf=getRightEncrypt(out,clientList[macInIndex].aes_key);
+				send(clientList[macInIndex].socket, encrypt_buf, strlen(encrypt_buf), 0);
+				///printf("....已发送%s\n",encrypt_buf);
+				free(out);
+				out=NULL;
+				
+			}else{
+				printf("暂不处理的请求!\n");
+			}
 			
-			json=cJSON_CreateObject();	
-			cJSON_AddStringToObject(json, "type","S_CON");
-			cJSON_AddStringToObject(json, "data",item->valuestring);
 			
-			out=cJSON_Print(json);
-			broadcast(out,index);
-			free(out);
-			out=NULL;
 			break;
 		default:
 			printf("非法的请求!");
@@ -295,23 +450,29 @@ void *threadConnect(void *vargp)
 	cJSON_Delete(json);	//清空json
 	
 	clientList[index].socket = -1;
-	if(0!=strcmp("Siri",clientList[index].nickName))
+	if(0!=strcmp(SIRI_NAME,clientList[index].nickName))
 	{
-		printf("%s[%s]离开聊天室!\n", clientList[index].nickName, clientList[index].ip);
+		printf("%s[%s]下线!\n", clientList[index].nickName, clientList[index].ip);
 		printf("当前在线数:%d\n", getClientCunt());
 	}
-	memset(recv_buf, 0, sizeof(recv_buf));
-	memset(clientList[index].nickName, 0, sizeof(clientList[index].nickName));
+	//memset(recv_buf, 0, sizeof(recv_buf));
+	memset(clientList[index].nickName,0,USER_LENGTH_NAME);
+	memset(clientList[index].aes_key,0,USER_LENGTH_KEY);
+	memset(clientList[index].macAddr,0,USER_LENGTH_MAC);
 	return NULL;
 }
 
 //获取请求类型
 int getRequestType(char *str)
 {
-	if(0==strcmp(str,"CONNECT")){		//连接请求
-		return CONNECT;
+	if(0==strcmp(str,"PI_CONNECT")){		//树莓派连接请求
+		return PI_CONNECT;
+	}else if(0==strcmp(str,"SI_CONNECT")){	//Siri响应程序连接请求
+		return SI_CONNECT;
 	}else if(0==strcmp(str,"S_CON")){	//Siri控制请求
 		return S_CON;
+	}else if(0==strcmp(str,"DATA_ONLE")){	//Siri控制请求
+		return DATA_ONLE;
 	}else if(0==strcmp(str,"TEST")){
 		//SIRI控制请求
 		return TEST;
@@ -346,6 +507,18 @@ int getIndexBySocket(int socket)
 	return -1;
 }
 
+int getIndexByMac(char *str)
+{
+	for (int i = 0; i < CLIENT_MAX_COUNT; i++)
+	{
+		if (clientList[i].socket>0&&0==strcmp(str,clientList[i].macAddr))
+		{
+			return i;
+		}
+	}
+	return -1;
+}
+
 int getClientCunt()
 {
 	int n = 0;
@@ -353,7 +526,7 @@ int getClientCunt()
 	{
 		if (clientList[i].socket >0)//!= -1
 		{
-			//printf("位置%d已占用,id:%d\n",i,clientList[i].socket);
+			printf("位置%d已占用,id:%d name:%s\n",i,clientList[i].socket,clientList[i].nickName);
 			n++;
 		}
 	}
@@ -378,7 +551,7 @@ void sayHello(char *str, char *ip, int index)
 	char name[10];
 	char hello[50];
 	strcpy(name, str + 3);
-	sprintf(hello, "欢迎%s[%s]加入聊天室!", name, ip);
+	sprintf(hello, "%s[%s]上线!", name, ip);
 	broadcast(hello, index);
 }
 
@@ -398,5 +571,39 @@ void initRsa()
 		exit(1);
 	}
 	fclose(fp);
+}
+
+void print_mysql_error(const char *msg)
+ { // 打印最后一次错误
+    if (msg)
+        printf("%s: %s\n", msg, mysql_error(sqlCon));
+    else
+        puts(mysql_error(sqlCon));
+}
+
+int executesql(const char * sql) 
+{
+    /*query the database according the sql*/
+    if (mysql_real_query(sqlCon, sql, strlen(sql))) // 如果失败
+        return -1; // 表示失败
+
+    return 0; // 成功执行
+}
+
+
+int init_mysql() 
+{ // 初始化连接
+    
+    sqlCon = mysql_init(NULL);
+    //设置字符编码,可能会乱码
+   //mysql_query(sqlCon,"set nemas utf-8");
+    
+    if(!mysql_real_connect(sqlCon, g_host_name, g_user_name, g_password, g_db_name, g_db_port, NULL, 0)) // 如果失败
+        return -1;
+ 
+    // 是否连接已经可用
+    if (executesql("set names utf8")) // 如果失败
+       return -1;
+    return 0; // 返回成功
 }
 

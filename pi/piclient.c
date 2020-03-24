@@ -12,11 +12,15 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
 #include <pthread.h>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 #include "../lib/cJSON/cJSON.h"
-#include "../lib/openssl/operate_aes.h"  
+#include "../lib/openssl/operate_aes.h"
+
+
 
 
 //请求类型
@@ -34,11 +38,12 @@ char aes_key[65];	//存贮对称密钥
 
 void *threadrecv(void *vargp);
 int getRequestType(char *str);
+void getMacaddr(char *str);
 
 int main(int argc, char *argv[])
 {
 	unsigned short port = 8000;		// 服务器的端口号
-	char *server_ip = "127.0.0.1";	// 服务器ip地址
+	char *server_ip = "123.207.127.205";	// 服务器ip地址
 
 	//char name[10]="PI";
 	int sockfd = 0;
@@ -80,12 +85,18 @@ int main(int argc, char *argv[])
 	//printf("length:%d,\nkey:%s.\naes_key:%s\n",length,key,aes_key);
 	BN_free(rnd);
 
+	char mac[18];
+	getMacaddr(mac);	//获取MAC地址
 	cJSON* root=cJSON_CreateObject();	
-	cJSON_AddStringToObject(root, "type","CONNECT");
+	cJSON_AddStringToObject(root, "type","PI_CONNECT");
+	cJSON_AddStringToObject(root, "mac",mac);
 	cJSON_AddStringToObject(root, "data",key);
 	
     unsigned char * out=(unsigned char *)cJSON_Print(root);
 	cJSON_Delete(root);
+
+	
+
 
 	//初始化rsa
 	FILE *fp = NULL;
@@ -190,10 +201,18 @@ void *threadrecv(void *vargp)
 			free(encrypt_buf);
 			out=NULL;
 			encrypt_buf=NULL;
-			exit(1);
+			//exit(1);
 			break;
 		case S_CON:	//Siri控制请求
-			printf("this is a si con test!\n");
+			item = cJSON_GetObjectItem(json, "data");
+			if (!item)
+			{
+				printf("Error before: [%s]\n", cJSON_GetErrorPtr());
+			}
+			if(0==strcmp("buon",item->valuestring))
+			{
+				printf("此处应该响铃!\n");
+			}
 			break;
 		default:
 			printf("非法的请求!");
@@ -217,4 +236,30 @@ int getRequestType(char *str)
 		return CON_R;
 	}
 	return 0;
+}
+
+void getMacaddr(char *str)
+{
+        struct ifreq ifreq; 
+        int sock;
+    
+        if((sock=socket(AF_INET,SOCK_STREAM,0))<0)
+        {
+                perror("socket");
+                return ;
+        }
+        strcpy(ifreq.ifr_name,"eth0");
+        
+        if(ioctl(sock,SIOCGIFHWADDR,&ifreq)<0)
+        {
+                perror("ioctl");
+                return ;
+        }
+        sprintf(str,"%02x:%02x:%02x:%02x:%02x:%02x",
+        (unsigned char)ifreq.ifr_hwaddr.sa_data[0],
+        (unsigned char)ifreq.ifr_hwaddr.sa_data[1],
+        (unsigned char)ifreq.ifr_hwaddr.sa_data[2],
+        (unsigned char)ifreq.ifr_hwaddr.sa_data[3],
+        (unsigned char)ifreq.ifr_hwaddr.sa_data[4],
+        (unsigned char)ifreq.ifr_hwaddr.sa_data[5]);
 }
